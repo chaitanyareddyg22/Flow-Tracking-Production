@@ -1,0 +1,19 @@
+package: "Review"
+name: "Review"
+author: "ShotGrid Pipeline Team"
+organization: "Saffronic"
+contact: "chaitanya.reddy@saffronic.com"
+version: "1.0"
+url: "http://www.saffronic.com"
+rv: "2023.0.1"
+requires: ""
+
+modes:
+  - file: "review"
+    load: immediate
+
+description: |
+  <p>This package is used to review the media and update the status by leads/supervisors
+  like Approve/Note/Retake and provide the feedback with annotations.</p>
+
+  <p>Developed by Chaitanya Reddy G | ShotGrid Pipeline</p>
