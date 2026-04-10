@@ -107,11 +107,15 @@ class Review(rvt.MinorMode):
         """
         rvt.MinorMode.__init__(self)
         globalBindings = None
-        localBindings = [('init-sg', self.initializeSgConnection, 'Initialize the ShotGrid Object')]
+        localBindings = [
+            ('init-sg', self.initializeSgConnection, 'Initialize the ShotGrid Object'),
+            ('play-start', self.show_event, 'will show rule of third grid')
+            ]
         self.sgObj = None
         self.toolkitUser = None
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.INFO)
+        self.grid_show = False
 
         menu = [
             ("Saffronic",
@@ -122,12 +126,204 @@ class Review(rvt.MinorMode):
                       ("Note", self.noteVersion, None, lambda:rvc.NeutralMenuState),
                       ("Retake", self.retakeVersion, None, lambda: rvc.NeutralMenuState)
                     ]
-                  )
+                  ),
+                 ("Rule Of Third",
+                  [
+                      ("Show", self.show, None, lambda:rvc.NeutralMenuState),
+                      ("Hide", self.hide, None, lambda: rvc.NeutralMenuState)
+                    ]
+                 )
                 ]
             )
             ]
         self.init("Review", globalBindings, localBindings, menu)
         
+        
+    def show_event(self, *args):
+        """
+        Event handler triggered on 'play-start' binding to display Rule of Third overlay.
+        
+        Automatically shows the overlay for current source groups if self.grid_show is True.
+        Extracts project name from media tracking info and applies white overlay.
+        
+        :param args: Event arguments (unused)
+        """
+        if self.grid_show:
+            cur_source_groups = rvc.nodesOfType('RVSource')
+            for each in cur_source_groups:
+                group_name = rvc.nodeGroup(str(each))
+                self.set_overlay_rule_of_third(group_name, "white")
+                    
+    def show(self, event):
+        """
+        Show the Rule of Third overlay via menu action.
+        
+        Sets self.grid_show to True and triggers the show_event handler
+        to apply overlays to current sources. Displays debug feedback.
+        
+        :param event: Menu event (unused)
+        """
+        self.grid_show = True
+        self.show_event(event)
+            
+            
+    def hide(self, event):
+        """
+        Hide the Rule of Third overlay across all current source groups.
+        
+        Sets self.grid_show to False and removes overlay rectangles by setting
+        their dimensions to zero.
+        
+        :param event: Menu event (unused)
+        """
+        self.grid_show = False
+        cur_source_groups = rvc.nodesOfType('RVSource')
+        for each in cur_source_groups:
+            group_name = rvc.nodeGroup(str(each))
+            self.set_overlay_rule_of_third(group_name, "white", status=False)
+
+    @staticmethod
+    def group_member_of_type(node, memberType):
+        """
+        Find the first node of specified type within a group.
+        
+        Iterates through all nodes in the group and returns the first
+        matching the given memberType (e.g., 'RVOverlay').
+        
+        :param node: Group node name
+        :type node: str
+        :param memberType: Node type to find (e.g., 'RVOverlay')
+        :type memberType: str
+        :return: First matching node or None
+        :rtype: str or None
+        """        
+        for n in rvc.nodesInGroup(node):
+            if rvc.nodeType(n) == memberType:
+                return n
+        return None
+
+    def create_overlay_rect(self, node, color, height, width, hpos, vpos):
+        """
+        Create rectangular overlay on RV overlay node with specified dimensions and color.
+        
+        Supports preset colors (red, green, blue, white). Sets up RV properties for
+        width, height, color, and position.
+        
+        :param node: Overlay node path (e.g., 'overlay_node.rect:1')
+        :type node: str
+        :param color: Color key ('red', 'green', 'blue', 'white')
+        :type color: str
+        :param height: Rectangle height (0.0 hides)
+        :type height: float
+        :param width: Rectangle width (0.0 hides)
+        :type width: float
+        :param hpos: Horizontal position (-1.2 to 1.2 range)
+        :type hpos: float
+        :param vpos: Vertical position (-0.5 to 0.5 range)
+        :type vpos: float
+        """        
+        _temp_color_dict = dict()
+        _temp_color_dict['red'] = [1.0, 0.1, 0.1, 0.4]
+        _temp_color_dict['green'] = [0.1, 1.0, 0.1, 0.4]
+        _temp_color_dict['blue'] = [0.1, 0.1, 1.0, 0.4]
+        _temp_color_dict['white'] = [1.0, 1.0, 1.0, 0.4]
+        _key_colors = _temp_color_dict.keys()
+        if color in _key_colors:
+            _color_val = _temp_color_dict.get(color)
+        else:
+            _color_val = _temp_color_dict.get('green')
+        
+        rvc.newProperty('%s.width' % node, rvc.FloatType, 1)
+        rvc.newProperty('%s.height' % node, rvc.FloatType, 1)
+        rvc.newProperty('%s.color' % node, rvc.FloatType, 4)
+        rvc.newProperty('%s.position' % node, rvc.FloatType, 2)
+
+        self.set_prop('%s.width' % node, [float(width)])
+        self.set_prop('%s.height' % node, [float(height)])
+        self.set_prop('%s.color' % node, _color_val)
+        self.set_prop('%s.position' % node, [float(hpos), float(vpos)])
+    
+
+    @staticmethod
+    def set_prop(prop, value):
+        """
+        Set RV property value handling int/float types and list/single values.
+        
+        Creates property if it doesn't exist, then sets int or float property
+        based on value type. Supports both single values and lists.
+        
+        :param prop: Full property path (e.g., 'node.width')
+        :type prop: str
+        :param value: Value to set (int, float, or list thereof)
+        :type value: int, float, or list
+        """        
+        if type(value) == int or (type(value) == list and len(value) and type(value[0]) == int):
+            if not rvc.propertyExists(prop):
+                rvc.newProperty(prop, rvc.IntType, 1)
+            rvc.setIntProperty(prop, value if (type(value) == list) else [value], True)
+
+        elif type(value) == float or (
+                type(value) == list and len(value) and type(value[0]) == float):
+            if not rvc.propertyExists(prop):
+                rvc.newProperty(prop, rvc.FloatType, 1)
+            rvc.setFloatProperty(prop, value if (type(value) == list) else [value], True)
+    
+
+    def set_overlay_rule_of_third(self, source_group, color, status=True):
+        """
+        Render Rule of Third overlay grid on RV source group.
+        
+        Creates 4 overlay rectangles (2 horizontal, 2 vertical lines)
+        forming standard Rule of Third composition guide. Shows/hides
+        based on status param. Uses create_overlay_rect for each line.
+        
+        :param source_group: RV source group node
+        :type source_group: str
+        :param color: Overlay color ('white', 'red', etc.)
+        :type color: str
+        :param status: Show (True) or hide (False) overlay
+        :type status: bool
+        :default status: True
+        """
+        try:
+            # CREATE THE OVERLAY NODE
+            # ------------------------
+            overlay_node = self.group_member_of_type(source_group, "RVOverlay")
+            rvc.setIntProperty(overlay_node + ".overlay.show", [1], True)
+            _height = 0.01 if status else 0.0
+            _width = 2.4 if status else 0.0
+
+            # MIDDLE
+            # -------------
+            _hpos = -1.2 if status else 0.0
+            _vpos = 0.17 if status else 0.0
+            self.create_overlay_rect(overlay_node + '.rect:1', color, _height, _width, _hpos, _vpos)
+
+            # BOTTOM
+            # -------------
+            _hpos = -1.2 if status else 0.0
+            _vpos = -0.16 if status else 0.0
+
+            self.create_overlay_rect(overlay_node + '.rect:2', color, _height, _width, _hpos, _vpos)
+
+            # DRAW VERTICAL LINES
+            # -----------------------
+            _height = 1.0 if status else 0.0
+            _width = 0.01 if status else 0.0
+
+            # LEFT SIDE
+            _hpos = -0.4 if status else 0.0
+            _vpos = -0.5 if status else 0.0
+            self.create_overlay_rect(overlay_node + '.rect:3', color, _height, _width, _hpos, _vpos)
+
+            # RIGHT SIDE
+            _hpos = 0.39 if status else 0.0
+            _vpos = -0.5 if status else 0.0
+            self.create_overlay_rect(overlay_node + '.rect:4', color, _height, _width, _hpos, _vpos)
+
+        except:
+            self.logger.error(traceback.format_exc())
+            rve.displayFeedback2("#### [ERROR] #### Rule of Third overlay failed to render. Check console.", 10.0)
 
     @staticmethod
     def validateInputData(mediaInfo, action):
