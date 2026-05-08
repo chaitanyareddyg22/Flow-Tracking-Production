@@ -93,31 +93,24 @@ LOGGER = setup_logger(
 
 
 def already_running(host="127.0.0.1", port=PORT):
-    """
-    Check if another instance of the server is already running.
+    """Return True only if *our* notification server is running.
 
-    This function attempts to connect to the specified host and port.
-    If the connection is successful, it means another instance is already
-    running and listening on that port.
+    The previous implementation only checked whether *something* was listening on
+    the TCP port, which can be a false-positive if another process (or a stale
+    socket) is bound to the same port.
 
-    Parameters:
-        host (str): The host address to check. Defaults to "127.0.0.1".
-        port (int): The port number to check. Defaults to PORT value.
-
-    Returns:
-        bool: True if another instance is running (connection successful),
-              False otherwise.
-
-    Example:
-        >>> if already_running():
-        ...     print("Server already running!")
-        ...     exit()
+    This version performs a lightweight handshake: connect -> send a marker ->
+    expect an ACK.
     """
     try:
-        with socket.create_connection((host, port), timeout=0.5):
-            return True
+        with socket.create_connection((host, port), timeout=0.5) as s:
+            s.settimeout(0.5)
+            s.sendall(b"__POPUP_SERVER_PING__")
+            ack = s.recv(64)
+            return ack == b"__POPUP_SERVER_PONG__"
     except OSError:
         return False
+
 
 
 def handle_signals():
@@ -239,11 +232,23 @@ def start_server():
 
                 # Handle the connection
                 try:
-                    # Receive data from client
-                    # Decode bytes to string
-                    data = conn.recv(BUFFER_SIZE).decode("utf-8")
+                    # Receive data from client (raw bytes)
+                    raw = conn.recv(BUFFER_SIZE)
+
+                    # Lightweight handshake for already_running() check.
+                    if raw == b"__POPUP_SERVER_PING__":
+                        try:
+                            conn.sendall(b"__POPUP_SERVER_PONG__")
+                        except Exception:
+                            pass
+                        return
+
+                    data = None
+                    if raw:
+                        data = raw.decode("utf-8", errors="replace")
 
                     if data:
+
                         # Try to parse data as JSON dict
                         try:
                             data_dict = json.loads(data)
@@ -262,13 +267,20 @@ def start_server():
                             toast(
                                 title=NOTIFICATION_TITLE,
                                 body=message,
-                                icon = resource_path("saff_icon.png"),
+                                icon=resource_path("saff_icon.png"),
                                 duration="long"
                             )
                             LOGGER.info("Toast notification displayed successfully")
+
+                            # Best-effort ACK for clients that read an ACK.
+                            try:
+                                conn.sendall(b"__POPUP_SERVER_ACK__")
+                            except Exception:
+                                pass
                         except Exception as toast_error:
                             LOGGER.error(f"Error showing toast notification: {toast_error}")
                             LOGGER.debug(traceback.format_exc())
+
                     else:
                         LOGGER.info("Empty data received, no notification shown")
                 except Exception as e:
