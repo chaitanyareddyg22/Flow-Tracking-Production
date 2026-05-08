@@ -16,6 +16,7 @@ Description:
 # --------------------------------------------------------------------------------------------------
 import os
 import logging
+from logging.handlers import TimedRotatingFileHandler
 
 # --------------------------------------------------------------------------------------------------
 # Third-party modules import
@@ -32,15 +33,30 @@ from action_menu_parsing import ShotgunActionException
 DEVS = ["CG001105031", "OS001105039", "KS001105033", "NN001105028"]
 
 
-def setup_logger(logger="SaffSgLogger", log_file=None):
+def setup_logger(
+    logger="SaffSgLogger",
+    log_file=None,
+    use_rotating=False,
+    when="D",
+    interval=1,
+    backup_count=7,
+):
     """
-    This Function creates/retrun the existing logger with File Handler or 
-    Stream handler based on the arguments
-    
+    This Function creates/retrun the existing logger with File Handler,
+    Stream handler or Timed Rotating File Handler based on the arguments
+
     :param logger: Logger Name, defaults to 'SaffSgLogger'
     :type logger: str, optional
     :param log_file: Logfile path, defaults to None
     :type log_file: str, optional
+    :param use_rotating: Use TimedRotatingFileHandler when True, defaults to False
+    :type use_rotating: bool, optional
+    :param when: Time interval type ('S', 'M', 'H', 'D', 'midnight', 'W0'-'W6'), defaults to 'D'
+    :type when: str, optional
+    :param interval: Number of time units, defaults to 1
+    :type interval: int, optional
+    :param backup_count: Number of backup files to keep, defaults to 7
+    :type backup_count: int, optional
     :raises Exception: raises the IO Exception ifuser dont have write access to log directory
     :return: Logger Object
     :rtype: logging
@@ -48,16 +64,19 @@ def setup_logger(logger="SaffSgLogger", log_file=None):
     try:
         logger = logging.getLogger(logger)
 
-        # if already Handlers available return it
+        # If handlers already exist, check if requested file handler is present
         if logger.hasHandlers():
-            for each_handler in logger.handlers:
-                if (
-                    log_file
-                    and isinstance(each_handler, logging.FileHandler)
-                    and each_handler.baseFilename.endswith(log_file)
-                ):
-                    return logger
-            return logger
+            if log_file:
+                # Check if a matching FileHandler already exists
+                for each_handler in logger.handlers:
+                    if isinstance(
+                        each_handler, logging.FileHandler
+                    ) and each_handler.baseFilename.endswith(log_file):
+                        return logger
+                # If not found, fall through to create a new file handler
+            else:
+                # No log_file requested → just reuse existing handlers
+                return logger
 
         logger.setLevel(logging.INFO)
 
@@ -69,15 +88,31 @@ def setup_logger(logger="SaffSgLogger", log_file=None):
             logger.addHandler(console_handler)
             return logger
 
-        # check and create log directory, if not exist
-        if not os.path.exists(os.path.dirname(log_file)):
-            os.makedirs(os.path.dirname(log_file))
+        # Ensure log directory exists
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
 
-        if os.getenv("USERNAME") in DEVS:
-            log_file = os.path.join(r"D:\SG_AMI_LOG", os.getenv("USERNAME") + ".log")
+        # Developer-specific override
+        user = os.getenv("USERNAME") or os.getenv("USER")
+        if user in DEVS:
+            use_rotating = False
+            log_file = os.path.join(r"D:\SG_AMI_LOG", f"{user}.log")
+            if logger.name in ['ServerLogger']:
+                log_file = os.path.join(r"D:\SG_AMI_LOG", "notification.log")
 
-        # add File Handler and return logeger
-        file_handler = logging.FileHandler(log_file, "w")
+        # Time-based rotating file handler
+        # Example: rotate every midnight, keep 7 backups
+        if use_rotating:
+            file_handler = TimedRotatingFileHandler(
+                log_file,
+                when=when,  # rotate every day
+                interval=interval,  # every 1 day
+                backupCount=backup_count,  # keep last 7 log files
+                encoding="utf-8",
+            )
+        # Normal File Handler
+        else:
+            file_handler = logging.FileHandler(log_file, "w")
+
         file_handler.setFormatter(
             logging.Formatter(
                 "%(asctime)s - %(name)s - %(levelname)s - [Line %(lineno)d] - %(message)s"
