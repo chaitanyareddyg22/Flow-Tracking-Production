@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Name:
     sg_file_operations.py
@@ -19,9 +20,7 @@ import traceback
 import shutil
 import os
 import json
-
-# import base64
-# import sqlite3
+import logging
 import stat
 import win32wnet
 import win32api
@@ -36,6 +35,7 @@ import win32security
 # --------------------------------------------------------------------------------------------------
 # Saffronic modules import
 # --------------------------------------------------------------------------------------------------
+from logger_setup import setup_logger
 
 # --------------------------------------------------------------------------------------------------
 # Global Variables
@@ -63,31 +63,42 @@ def impersonate(func):
         handle = None
         result = None
 
-        # Step 1: Fetch credentials from DB
+        # Try to find a logger in kwargs or args
+        logger = kwargs.get("logger")
+
+        # If not found directly, scan through kwargs values
+        if not logger:
+            for value in kwargs.values():
+                if isinstance(value, logging.Logger):
+                    logger = value
+                    break
+
+        # If still not found, scan through positional args
+        if not logger:
+            for arg in args:
+                if isinstance(arg, logging.Logger):
+                    logger = arg
+                    break
+
+        # if still not found go for SaffSgLogger
+        if not logger:
+            logger = setup_logger()
+
         try:
-            # dbFile = CONFIG_DATA['dbFilePath']
-            # conn = sqlite3.connect(dbFile)
-            # cursor = conn.execute("SELECT name, pwsd FROM SCRIPT_USER")
-            # rows = cursor.fetchall()
-            # if not rows:
-            #     print("No script user found in DB.")
-            #     return func(*args, **kwargs)
-
-            # Use the last user record
-            # login = base64.b64decode(rows[-1][0]).decode('ascii')
-            # password = base64.b64decode(rows[-1][1]).decode('ascii')
-
-            login = ""
-            password = ""
+            # TODO: Replace with secure credential retrieval
+            login = "iX0S8367@techmahindra.com"
+            password = "Svs1ihNwgtvkM7Mu4xSqjKP4wT7lwKFV"
 
         except Exception as e:
-            print("Error during DB operation:", traceback.format_exc())
-            print(e)
+            logger.error("Error during DB operation: %s", traceback.format_exc())
+            logger.error(e)
             return func(*args, **kwargs)
 
         finally:
             if conn:
                 conn.close()
+
+        logger.info(os.getenv("USERDOMAIN"))
 
         # Step 2: Impersonate and execute the function
         if login and password:
@@ -109,20 +120,24 @@ def impersonate(func):
                         win32con.LOGON32_PROVIDER_DEFAULT,
                     )
                 win32security.ImpersonateLoggedOnUser(handle)
+                logger.info(handle)
                 result = func(*args, **kwargs)
+                logger.info(result)
 
             except Exception:
-                print("Error during impersonation:", traceback.format_exc())
+                logger.error("Error during impersonation: %s", traceback.format_exc())
 
             finally:
                 try:
                     if handle:
                         win32security.RevertToSelf()
+                        logger.info(handle)
                         handle.Close()
+                        logger.info("Closed handle")
                 except Exception:
-                    print("Error during cleanup:", traceback.format_exc())
+                    logger.error("Error during cleanup: %s", traceback.format_exc())
         else:
-            print("Login or Password is empty, So skipping Impersonation.")
+            logger.error("Login or Password is empty, So skipping Impersonation.")
             result = func(*args, **kwargs)
 
         return result
@@ -139,6 +154,8 @@ def copy(
     overwrite=False,
     buffer=16 * 1024,
     metadata=True,
+    ignore_callable=None,
+    dir_exists_ok=False,
 ):
     """
     Copies files or directories from the source to the destination with customizable options.
@@ -157,11 +174,20 @@ def copy(
     :type buffer: int, optional
     :param metadata: If True, preserves file metadata, defaults to True.
     :type metadata: bool, optional
-    :raises ValueError: If the source path doesn't exist or if source and 
+    :raises ValueError: If the source path doesn't exist or if source and
     destination are incompatible.
-    :return: True if the copy operation was successful, False otherwise.
-    :rtype: bool
+    :return: Tuple of (status, message). `status` is True if the copy operation was successful.
+    :rtype: tuple[bool, str]
+    :param ignore_callable: Optional callable used to decide which paths to ignore during the copy.
+        If provided, it takes precedence over the `ignores` patterns.
+    :type ignore_callable: Callable|None
+    :param dir_exists_ok: When `source` is a directory and `destination` already exists:
+        - if False (default): raise unless `overwrite=True` (old behavior).
+        - if True: merge/copy into the existing destination directory.
+    :type dir_exists_ok: bool
     """
+
+
     status = False
     msg = ""
     try:
@@ -193,32 +219,65 @@ def copy(
 
         shutil.copyfileobj = _copy_file_obj
 
-        # Ignore patterns if provided
-        ignore_func = shutil.ignore_patterns(*ignores) if ignores else None
+        # Prefer callable-based ignore (custom ignore logic)
+        ignore_func = ignore_callable if ignore_callable else (
+            shutil.ignore_patterns(*ignores) if ignores else None
+        )
 
         # Handle existing destination
         if destination_path.exists():
-            if not overwrite:
-                msg = msg + "Destination already exists. Overwrite is set to False."
-                logger.error(msg)
-                raise ValueError(msg)
-
-            # Check the access of file/folder and make it writable if it's not
-            if not os.access(destination_path, os.W_OK):
-                original_mode = stat.S_IMODE(destination_path.stat().st_mode)
-                destination_path.chmod(original_mode | stat.S_IWRITE)
-
+            original_mode = None
+            perm_path= None
+            # For Files (copy/copy2)
             if source_path.is_file():
-                copy_func(source, destination)
+                if destination_path.is_dir():
+                  destination_path = destination_path / source_path.name
+                  
+                # Track permission target explicitly
+                perm_path = destination_path
+                  
+                # Check the access of file/folder and make it writable if it's not
+                if perm_path.exists() and not os.access(perm_path, os.W_OK):
+                    original_mode = stat.S_IMODE(perm_path.stat().st_mode)
+                    perm_path.chmod(original_mode | stat.S_IWRITE)
+                    
+                if destination_path.exists() and not overwrite:
+                    msg = msg + "Destination already exists. Overwrite is set to False."
+                    logger.error(msg)
+                    raise ValueError(msg)
+                
+                copy_func(source_path, destination_path)
                 status = True
+                
+            # For directories (copytree)
             else:
-                shutil.rmtree(destination)
-                shutil.copytree(source, destination, ignore=ignore_func)
+                # Destination directory is the permission target
+                perm_path = destination_path
+                
+                # Check the access of file/folder and make it writable if it's not
+                if not os.access(perm_path, os.W_OK):
+                    original_mode = stat.S_IMODE(perm_path.stat().st_mode)
+                    perm_path.chmod(original_mode | stat.S_IWRITE)
+                
+                if not overwrite and not dir_exists_ok:
+                    msg = msg + "Destination already exists. Overwrite is set to False."
+                    logger.error(msg)
+                    raise ValueError(msg)
+
+                if overwrite and not dir_exists_ok:
+                    shutil.rmtree(destination)
+
+                shutil.copytree(
+                    source,
+                    destination,
+                    ignore=ignore_func,
+                    dirs_exist_ok=dir_exists_ok,
+                )
                 status = True
 
             # restore the original mode of destination, if it is modified
-            if "originalMode" in locals():
-                destination_path.chmod(original_mode)
+            if original_mode is not None and perm_path is not None:
+                perm_path.chmod(original_mode)
 
         # Handle non-existent destination
         else:
@@ -230,19 +289,11 @@ def copy(
                 copy_func(source, destination)
                 status = True
             else:
-                if destination_path.is_file():
-                    msg = (
-                        msg
-                        + "Source is a directory and destination is a file. Please check."
-                    )
-                    logger.error(msg)
-                    raise ValueError(msg)
-                else:
-                    shutil.copytree(source, destination, ignore=ignore_func)
-                    status = True
+                shutil.copytree(source_path, destination_path, ignore=ignore_func)
+                status = True
 
     except Exception as e:
-        msg = str(e)
+        msg = msg + str(e)
         logger.error(f"An error occurred: {str(e)}")
         logger.error(traceback.format_exc())
 
