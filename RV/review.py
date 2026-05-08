@@ -144,7 +144,6 @@ class Review(rvt.MinorMode):
         Event handler triggered on 'play-start' binding to display Rule of Third overlay.
         
         Automatically shows the overlay for current source groups if self.grid_show is True.
-        Extracts project name from media tracking info and applies white overlay.
         
         :param args: Event arguments (unused)
         """
