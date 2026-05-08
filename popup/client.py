@@ -105,34 +105,39 @@ def send_notification(logger, message, host, port=DEFAULT_PORT):
     logger.info(type(host))
     logger.info(port)
     logger.info(message)
-    
+
+    # Prevent client-side hangs/timeouts from surfacing as ambiguous failures.
+    # If server isn't listening/reachable, we fail fast.
+    client.settimeout(3.0)
+
     try:
         # Establish connection to the server
-        # Connect to the specified host and port
         client.connect((host, port))
-        
+
         # Convert message to string if it's a dictionary
-        # This allows flexible message passing - both dict and str types supported
         if isinstance(message, dict):
-            # Serialize dictionary to JSON string for structured data transfer
             message = json.dumps(message)
-        
-        # Encode the message to bytes (UTF-8 encoding)
-        # This is required because socket.send() expects bytes, not strings
-        # Using "utf-8" ensures proper encoding of special characters
-        client.send(message.encode("utf-8"))
-        
+
+        payload = message.encode("utf-8")
+        client.sendall(payload)
+
+        # Optional ACK (server may or may not send it depending on version).
+        # We read with the same timeout; if no ACK, we just continue.
+        try:
+            ack = client.recv(1024)
+            if ack:
+                logger.info(f"Notification ACK: {ack.decode('utf-8', errors='ignore')}")
+        except socket.timeout:
+            pass
+
     except Exception as e:
-        # Log the error for debugging purposes
-        # This helps identify connection issues
         logger.error(f"Error sending notification: {e}")
         logger.error(traceback.format_exc())
-        
+
     finally:
-        # Always close the client socket to release network resources
-        # This ensures proper cleanup regardless of whether send succeeded or failed
         logger.info("closing connection")
         client.close()
+
 
 
 # --------------------------------------------------------------------------------------------------
